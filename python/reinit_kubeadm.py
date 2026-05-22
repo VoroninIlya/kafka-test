@@ -152,6 +152,8 @@ def main():
     #run(f"kubectl apply -f {args.path}/kafka_pv.yaml", check=False)
     #run(f"kubectl apply -f {args.path}/kafka_pvc.yaml", check=False)
     run(f"kubectl apply -f {args.path}/kafka_stateful_set.yaml", check=False)
+    run(f"kubectl apply -f {args.path}/kafka_ui.yaml", check=False)
+    run(f"kubectl apply -f {args.path}/kafka_ui_service.yaml", check=False)
     
     print("\nWaiting for pods to stabilize...\n")
     time.sleep(20)

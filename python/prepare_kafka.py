@@ -46,8 +46,8 @@ def generate(path, host_ip, n_brokers = 3, container_id = "my_container_id"):
     ips = []
     origin_ip = host_ip.split(".")
     for i in range(n_brokers):
-      parts = origin_ip
-      parts[-1] = str(int(origin_ip[-1]) + i + 1)
+      parts = origin_ip.copy()
+      parts[-1] = str(int(parts[-1]) + i + 1)
       new_ip = ".".join(parts)
       ips.append(new_ip)
 
@@ -238,6 +238,69 @@ f"\n              echo \"POD_NAME=$POD_NAME\"\n\
       resources:\n\
         requests:\n\
           storage: 10Gi"
+      )
+        
+    with Path(path, "kafka_ui_service.yaml").open("w", encoding="utf-8", newline="\n") as f:
+      f.write(
+"""
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: kafka
+
+spec:
+  selector:
+    app: kafka-ui
+
+  ports:
+  - port: 80
+    targetPort: 8080
+
+  type: ClusterIP
+"""
+      )
+
+    with Path(path, "kafka_ui.yaml").open("w", encoding="utf-8", newline="\n") as f:
+      f.write(
+"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui
+  namespace: kafka
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: kafka-ui
+
+  template:
+    metadata:
+      labels:
+        app: kafka-ui
+
+    spec:
+      containers:
+      - name: kafka-ui
+
+        image: provectuslabs/kafka-ui:latest
+
+        ports:
+        - containerPort: 8080
+
+        env:
+        - name: KAFKA_CLUSTERS_0_NAME
+          value: my-test-kafka-kluster
+
+        - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+          value: kafka-0.kafka-internal.kafka.svc.cluster.local:9092
+
+        - name: DYNAMIC_CONFIG_ENABLED
+          value: 'true'
+"""
       )
 
 def main():
