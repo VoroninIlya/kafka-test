@@ -1,89 +1,140 @@
-#include <librdkafka/rdkafka.h>
-#include <librdkafka/rdkafkacpp.h>
+
 #include <iostream>
+#include <thread>
 #include <string>
+#include <sstream>
+#include <fstream>
+#include <csignal>
 
-class DeliveryReportCb : public RdKafka::DeliveryReportCb {
-public:
-    void dr_cb(RdKafka::Message &message) override {
-        if (message.err()) {
-            std::cerr << "Delivery failed: "
-                      << message.errstr() << std::endl;
-        } else {
-            std::cout << "Delivered to topic "
-                      << message.topic_name()
-                      << " [" << message.partition()
-                      << "] offset "
-                      << message.offset()
-                      << std::endl;
-        }
-    }
-};
+#include <rapidjson/document.h>
 
-int main() {
-    std::string errstr;
+//#include "producer/producer.hpp"
+#include "producer/ThreadPool.hpp"
+#include "producer/ProducerRegistry.hpp"
 
-    // -------- CONFIG --------
-    RdKafka::Conf *conf = RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL);
+std::atomic<bool> globalStop(false);
 
-    conf->set("bootstrap.servers", "192.168.1.103:9094", errstr);
+static void cli(producer::ProducerManager& pm);
 
-    DeliveryReportCb dr_cb;
-    conf->set("dr_cb", &dr_cb, errstr);
+static void handleSigint(int) {
+    globalStop = true;
+}
 
-    // -------- CREATE PRODUCER --------
-    RdKafka::Producer *producer =
-        RdKafka::Producer::create(conf, errstr);
+int main(int argc, char* argv[]) {
 
-    if (!producer) {
-        std::cerr << "Failed to create producer: " << errstr << std::endl;
-        return 1;
-    }
+    std::signal(SIGINT, handleSigint);
 
-    delete conf;
+    producer::ThreadPool pool(4, 1000);
+    producer::ProducerManager pm(pool);
 
-    std::string topic = "test-topic";
+    if (argc == 2) {
+        std::string configPath = argv[1];
 
-    // -------- SEND MESSAGES --------
-    for (int i = 0; i < 10; i++) {
-        std::string msg = "message " + std::to_string(i);
+        std::ifstream file(configPath);
 
-        RdKafka::ErrorCode resp = producer->produce(
-             /* Topic name */
-            topic,
-            /* Any Partition: the builtin partitioner will be
-             * used to assign the message to a topic based
-             * on the message key, or random partition if
-             * the key is not set. */
-            RdKafka::Topic::PARTITION_UA,
-            /* Make a copy of the value */
-            RdKafka::Producer::RK_MSG_COPY /* Copy payload */,
-            /* Value */
-            const_cast<char*>(msg.c_str()), msg.size(),
-            /* Key */
-            nullptr, 0,
-            /* Timestamp (defaults to current time) */
-            0,
-            /* Message headers, if any */
-            nullptr,
-            /* Per-message opaque value passed to
-             * delivery report */
-            nullptr
-        );
-
-        if (resp != RdKafka::ERR_NO_ERROR) {
-            std::cerr << "Produce failed: "
-                      << RdKafka::err2str(resp) << std::endl;
+        if (!file.is_open()) {
+            std::cerr << "Cannot open file\n";
+            return 1;
         }
 
-        producer->poll(0); // trigger delivery callbacks
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+
+        std::string json = buffer.str();
+
+        rapidjson::Document d;
+        d.Parse(json.c_str());
+
+        if (!d.IsObject()) {
+            std::cerr << "Invalid JSON\n";
+            return 1;
+        }
+
+        const auto& producers = d["producers"];
+
+        for (auto& p : producers.GetArray()) {
+
+            auto name = p["name"].GetString();
+            auto brokers = p["brokers"].GetString();
+            auto topic = p["topic"].GetString();
+            auto period_ms = p["period_ms"].GetInt();
+
+            int id = pm.start(name, brokers, topic, period_ms);
+            std::cout << "started id=" << id 
+                      << "name: " << name << " "
+                      << "brokers: " << brokers << " "
+                      << "topic: " << topic << " "
+                      << "period[ms]: " << period_ms << " "
+                      << "\n";
+        }
     }
 
-    // -------- FLUSH --------
-    std::cout << "Flushing...\n";
-    producer->flush(5000);
+    std::thread cliThread([&] {
+        cli(pm);
+    });
 
-    delete producer;
+    cliThread.join();
+
+    pool.shutdown();
 
     return 0;
+
+    //MyProducer prc;
+//
+    //std::thread t1(&MyProducer::producer_100ms, &prc, "192.168.1.103:9094", "test-topic-1");
+    //std::thread t2(&MyProducer::producer_1s, &prc, "192.168.1.104:9094", "test-topic-2");
+//
+    //t1.join();
+    //t2.join();
+//
+    //return 0;
+}
+
+void cli(producer::ProducerManager& pm) {
+    std::string cmd;
+
+    while (true) {
+        std::cout << "> ";
+        std::cin >> cmd;
+
+        if (cmd == "start") {
+            std::string name, brokers, topic;
+            uint32_t period_ms;
+
+            std::cout << "name: ";
+            std::cin >> name;
+
+            std::cout << "brokers: ";
+            std::cin >> brokers;
+
+            std::cout << "topic: ";
+            std::cin >> topic;
+
+            std::cout << "period[ms]: ";
+            std::cin >> period_ms;
+
+            int id = pm.start(name, brokers, topic, period_ms);
+            std::cout << "started id=" << id 
+                      << "name: " << name << " "
+                      << "brokers: " << brokers << " "
+                      << "topic: " << topic << " "
+                      << "period[ms]: " << period_ms << " "
+                      << "\n";
+        }
+
+        else if (cmd == "stop") {
+            int id;
+            std::cout << "id: ";
+            std::cin >> id;
+            pm.stop(id);
+        }
+
+        else if (cmd == "list") {
+            std::cout << pm.list();
+        }
+
+        else if (cmd == "exit") {
+            break;
+        }
+    }
 }

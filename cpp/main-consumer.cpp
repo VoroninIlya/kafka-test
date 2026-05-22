@@ -9,7 +9,7 @@ int main() {
     // -------- CONFIG --------
     RdKafka::Conf *conf = RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL);
 
-    conf->set("bootstrap.servers", "10.48.168.177:30092", errstr);
+    conf->set("bootstrap.servers", "192.168.1.105:9094", errstr);
     conf->set("group.id", "test-consumer-group", errstr);
     conf->set("auto.offset.reset", "earliest", errstr);
 
@@ -25,7 +25,7 @@ int main() {
     delete conf;
 
     // -------- SUBSCRIBE --------
-    std::vector<std::string> topics = {"test-topic"};
+    std::vector<std::string> topics = {"test-topic-1"};
 
     RdKafka::ErrorCode err = consumer->subscribe(topics);
     if (err) {
