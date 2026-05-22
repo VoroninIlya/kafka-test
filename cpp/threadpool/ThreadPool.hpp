@@ -8,7 +8,7 @@
 #include <functional>
 #include <atomic>
 
-namespace producer {
+namespace threadpool {
 
     class ThreadPool {
     public:

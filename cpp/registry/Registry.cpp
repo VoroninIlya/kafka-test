@@ -2,17 +2,14 @@
 #include <iostream>
 #include <sstream>
 
-#include "ProducerRegistry.hpp" 
+#include "Registry.hpp" 
 
-namespace producer {
+namespace registry {
 
-    int ProducerManager::start(const std::string& name, const std::string& brokers, 
-            const std::string& topic, uint32_t periode_ms) {
+    int RegistryManager::start(std::unique_ptr<workers::IWorker> worker) {
         std::lock_guard<std::mutex> lock(m_mtx);
 
         int id = ++m_counter;
-
-        auto worker = std::make_unique<ProducerWorker>(name, brokers, topic, periode_ms);
 
         auto future = m_pool.enqueue([w = worker.get()] {
             w->run();
@@ -26,26 +23,33 @@ namespace producer {
         return id;
     }
 
-    void ProducerManager::stop(int id) {
+    void RegistryManager::stop(int id) {
         std::lock_guard<std::mutex> lock(m_mtx);
 
         auto it = m_producers.find(id);
         if (it != m_producers.end()) {
-            it->second.worker->stopProducer();
+            it->second.worker->stop();
             m_producers.erase(it);
         }
     }
 
-    std::string ProducerManager::list() {
+    bool RegistryManager::isStarted(int id) {
+        std::lock_guard<std::mutex> lock(m_mtx);
+
+        auto it = m_producers.find(id);
+        if (it != m_producers.end()) {
+            return it->second.worker->isStarted();
+        }
+        return false;
+    }
+
+    std::string RegistryManager::list() {
         std::lock_guard<std::mutex> lock(m_mtx);
         std::ostringstream oss;
 
         for (auto& [id, p] : m_producers) {
             oss << "id: " << id << " "
-                << "name: " << p.worker->getName() << " "
-                << "brokers: " << p.worker->getBrokers() << " "
-                << "topic: " << p.worker->getTopic() << " "
-                << "period[ms]: " << p.worker->getPeriodMs() << " "
+                << *p.worker
                 << "\n";
         }
 

@@ -1,4 +1,5 @@
 #include <librdkafka/rdkafkacpp.h>
+#include <rapidjson/document.h>
 #include <ctime>
 #include <iomanip>
 #include <chrono>
@@ -26,6 +27,28 @@ namespace producer {
             }
         }
     };
+
+    ProducerWorker::ProducerWorker(const std::string json) : m_stop(false) {
+        rapidjson::Document d;
+        d.Parse(json.c_str());
+
+        if (!d.IsObject()) return;
+
+        if (!d.HasMember("name")) return;
+
+        m_name = d["name"].GetString();
+
+        if (d.HasMember("brokers")) 
+            m_brokers = d["brokers"].GetString();
+
+        if (d.HasMember("topic")) 
+            m_topic = d["topic"].GetString();
+
+        if (d.HasMember("period_ms")) 
+            m_period_ms  = d["period_ms"].GetInt();
+
+        m_isStarted = true;
+    }
 
     void ProducerWorker::run() {
         std::string errstr;
@@ -103,25 +126,37 @@ namespace producer {
 
             std::this_thread::sleep_until(next);
         }
+        m_isStarted = false;
     }
 
-    void ProducerWorker::stopProducer() {
+    void ProducerWorker::print(std::ostream& os) const {
+        os  << "name: " << m_name << " "
+            << "brokers: " << m_brokers << " "
+            << "topic: " << m_topic << " "
+            << "period[ms]: " << m_period_ms << " ";
+    }
+
+    bool ProducerWorker::isStarted() const {
+        return m_isStarted;
+    }
+
+    void ProducerWorker::stop() {
         m_stop.store(true);
     }
 
-    std::string ProducerWorker::getName() {
+    std::string ProducerWorker::getName() const {
         return m_name;
     }
 
-    std::string ProducerWorker::getBrokers() {
+    std::string ProducerWorker::getBrokers() const {
         return m_brokers;
     }
 
-    std::string ProducerWorker::getTopic() {
+    std::string ProducerWorker::getTopic() const {
         return m_topic;
     }
 
-    uint32_t ProducerWorker::getPeriodMs() {
+    uint32_t ProducerWorker::getPeriodMs() const {
         return m_period_ms;
     }
 

@@ -1,68 +1,159 @@
-#include <librdkafka/rdkafka.h>
-#include <librdkafka/rdkafkacpp.h>
 #include <iostream>
-#include <memory>
+#include <thread>
+#include <string>
+#include <sstream>
+#include <fstream>
+#include <csignal>
 
-int main() {
-    std::string errstr;
+#include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
-    // -------- CONFIG --------
-    RdKafka::Conf *conf = RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL);
+#include "ThreadPool.hpp"
+#include "Registry.hpp"
+#include "ConsumerWorker.hpp"
 
-    conf->set("bootstrap.servers", "192.168.1.105:9094", errstr);
-    conf->set("group.id", "test-consumer-group", errstr);
-    conf->set("auto.offset.reset", "earliest", errstr);
+std::atomic<bool> globalStop(false);
 
-    // -------- CREATE CONSUMER --------
-    RdKafka::KafkaConsumer *consumer =
-        RdKafka::KafkaConsumer::create(conf, errstr);
+static void cli(registry::RegistryManager& rm);
 
-    if (!consumer) {
-        std::cerr << "Failed to create consumer: " << errstr << std::endl;
-        return 1;
-    }
+static void handleSigint(int) {
+    globalStop = true;
+}
 
-    delete conf;
+int main(int argc, char* argv[]) {
 
-    // -------- SUBSCRIBE --------
-    std::vector<std::string> topics = {"test-topic-1"};
+    std::signal(SIGINT, handleSigint);
 
-    RdKafka::ErrorCode err = consumer->subscribe(topics);
-    if (err) {
-        std::cerr << "Subscribe failed: "
-                  << RdKafka::err2str(err) << std::endl;
-        return 1;
-    }
+    threadpool::ThreadPool pool(4, 1000);
+    registry::RegistryManager rm(pool);
 
-    std::cout << "Consumer started...\n";
+    if (argc == 2) {
+        std::string configPath = argv[1];
 
-    // -------- POLL LOOP --------
-    while (true) {
-        RdKafka::Message *msg = consumer->consume(1000);
+        std::ifstream file(configPath);
 
-        switch (msg->err()) {
-            case RdKafka::ERR_NO_ERROR:
-                std::cout << "Message: "
-                          << std::string((char*)msg->payload(),
-                                         msg->len())
-                          << std::endl;
-                break;
-
-            case RdKafka::ERR__TIMED_OUT:
-                // no message, normal
-                break;
-
-            default:
-                std::cerr << "Error: "
-                          << msg->errstr() << std::endl;
-                break;
+        if (!file.is_open()) {
+            std::cerr << "Cannot open file\n";
+            return 1;
         }
 
-        delete msg;
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+
+        std::string json = buffer.str();
+
+        rapidjson::Document d;
+        d.Parse(json.c_str());
+
+        if (!d.IsObject()) {
+            std::cerr << "Invalid JSON\n";
+            return 1;
+        }
+
+        const auto& producers = d["producers"];
+
+        for (auto& p : producers.GetArray()) {
+
+            auto name = p["name"].GetString();
+            auto brokers = p["brokers"].GetString();
+            auto topic = p["topic"].GetString();
+            auto groupId = p["group_id"].GetString();
+
+            rapidjson::StringBuffer buffer;
+            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+
+            p.Accept(writer);
+
+            std::string jsonString = buffer.GetString();
+
+            int id = rm.start(std::make_unique<consumer::ConsumerWorker>(jsonString));
+            if (rm.isStarted(id)) {
+                std::cout << "started id=" << id << " "
+                          << "name: " << name << " "
+                          << "brokers: " << brokers << " "
+                          << "topic: " << topic << " "
+                          << "group id: " << groupId << " "
+                          << "\n";
+            }
+        }
     }
 
-    consumer->close();
-    delete consumer;
+    std::thread cliThread([&] {
+        cli(rm);
+    });
+
+    cliThread.join();
+
+    pool.shutdown();
 
     return 0;
+}
+
+void cli(registry::RegistryManager& rm) {
+    std::string cmd;
+
+    while (true) {
+        std::cout << "> ";
+        std::cin >> cmd;
+
+        if (cmd == "start") {
+            std::string name, brokers, topic, groupId;
+
+            std::cout << "name: ";
+            std::cin >> name;
+
+            std::cout << "brokers: ";
+            std::cin >> brokers;
+
+            std::cout << "topic: ";
+            std::cin >> topic;
+
+            std::cout << "group id: ";
+            std::cin >> groupId;
+
+            rapidjson::Document d;
+            d.SetObject();
+            auto& allocator = d.GetAllocator();
+            rapidjson::Value obj(rapidjson::kObjectType);
+            obj.AddMember("name", 
+                rapidjson::Value(name.c_str(), allocator), allocator);
+            obj.AddMember("brokers", 
+                rapidjson::Value(brokers.c_str(), allocator), allocator);
+            obj.AddMember("topic", 
+                rapidjson::Value(topic.c_str(), allocator), allocator);
+            obj.AddMember("group_id", 
+                rapidjson::Value(groupId.c_str(), allocator), allocator);
+
+            rapidjson::StringBuffer buffer;
+            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+
+            obj.Accept(writer);
+
+            int id = rm.start(std::make_unique<consumer::ConsumerWorker>(buffer.GetString()));
+            if (rm.isStarted(id)) {
+                std::cout << "started id=" << id << " "
+                          << "name: " << name << " "
+                          << "brokers: " << brokers << " "
+                          << "topic: " << topic << " "
+                          << "group id: " << groupId << " "
+                          << "\n";
+            }
+        }
+
+        else if (cmd == "stop") {
+            int id;
+            std::cout << "id: ";
+            std::cin >> id;
+            rm.stop(id);
+        }
+
+        else if (cmd == "list") {
+            std::cout << rm.list();
+        }
+
+        else if (cmd == "exit") {
+            break;
+        }
+    }
 }

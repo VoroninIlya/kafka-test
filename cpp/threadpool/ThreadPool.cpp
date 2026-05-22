@@ -4,7 +4,7 @@
 
 #include "ThreadPool.hpp"
 
-namespace producer {
+namespace threadpool {
 
     ThreadPool::ThreadPool(size_t threads, size_t maxQueue)
         : m_stop(false), m_maxQueueSize(maxQueue) {
